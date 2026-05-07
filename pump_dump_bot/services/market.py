@@ -10,7 +10,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://api.binance.com/api/v3"
+BASE_URL = "https://api1.binance.com/api/v3"
 FAPI_URL = "https://fapi.binance.com/fapi/v1"  # фьючерсы
 
 # Топ шиткоины из топ-20 Binance (без BTC, ETH, SOL)
