@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Config:
-    BOT_TOKEN:"8698168846:AAHRdWSbIgBpriNcFjgRd6a1FboZEE2j6bM"
+    BOT_TOKEN: str
     SCAN_INTERVAL: int = 300  # секунды между авто-сканами (5 минут)
 
 

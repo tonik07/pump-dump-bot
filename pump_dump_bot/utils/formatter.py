@@ -1,5 +1,4 @@
 """Форматирование сообщений для Telegram (HTML)"""
-from services.market import CoinData
 from datetime import datetime
 
 
@@ -36,7 +35,7 @@ def signal_label(signal: str) -> str:
     return {"pump": "НАКОПЛЕНИЕ", "dump": "ПЕРЕГРЕВ", "neutral": "НЕЙТРАЛЬНО"}.get(signal, "—")
 
 
-def format_coin_card(c: CoinData, short: bool = False) -> str:
+def format_coin_card(c, short: bool = False) -> str:
     emoji = signal_emoji(c.signal)
     label = signal_label(c.signal)
     p_emoji_1h = "📈" if c.price_change_1h >= 0 else "📉"
@@ -74,7 +73,6 @@ def format_coin_card(c: CoinData, short: bool = False) -> str:
             lsr_icon = "🐂" if lsr > 1.3 else ("🐻" if lsr < 0.8 else "⚖️")
             lines.append(f"{lsr_icon} Long/Short: <code>{lsr:.2f}</code>")
 
-        # Сигналы
         if c.signals_list:
             lines.append("")
             for sig, stype in c.signals_list[:4]:
@@ -86,10 +84,7 @@ def format_coin_card(c: CoinData, short: bool = False) -> str:
     return "\n".join(lines)
 
 
-def format_scan_report(coins: list[CoinData], filter_signal: str = "all") -> list[str]:
-    """
-    Возвращает список сообщений (Telegram лимит 4096 символов на сообщение).
-    """
+def format_scan_report(coins: list, filter_signal: str = "all") -> list[str]:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
 
     if filter_signal == "all":
@@ -115,7 +110,7 @@ def format_scan_report(coins: list[CoinData], filter_signal: str = "all") -> lis
 
     header = (
         f"{header_emoji} <b>Pump/Dump Scanner</b>\n"
-        f"<i>Binance Altcoins · Топ-20 (без BTC/ETH/SOL)</i>\n"
+        f"<i>Binance · Топ-30 динамический (без BTC/ETH/SOL)</i>\n"
         f"🕐 {now}\n\n"
         f"🟢 Накопление: <b>{pump_count}</b>  "
         f"🔴 Перегрев: <b>{dump_count}</b>  "
@@ -144,25 +139,29 @@ def format_scan_report(coins: list[CoinData], filter_signal: str = "all") -> lis
     return messages
 
 
-def format_single_coin(c: CoinData) -> str:
+def format_single_coin(c) -> str:
     return format_coin_card(c, short=False)
 
 
 def format_help() -> str:
     return (
         "📊 <b>Pump/Dump Scanner Bot</b>\n\n"
-        "Анализирую монеты из топ-20 Binance по 4 факторам:\n"
-        "  • 📊 <b>Объём</b> — аномальный рост vs норма\n"
-        "  • 🔥 <b>OI</b> — открытый интерес (фьючерсы)\n"
-        "  • 💸 <b>Денежный поток</b> — вход/выход капитала\n"
-        "  • 🐋 <b>Активность китов</b> — Long/Short ratio\n\n"
-        "<b>Команды:</b>\n"
+        "Анализирую топ-30 альткоинов Binance по объёмам, "
+        "OI, денежным потокам, китам и таймфреймам.\n\n"
+        "<b>📡 Основные команды:</b>\n"
         "/scan — полный скан всех монет\n"
         "/pump — только накопление 🟢\n"
         "/dump — только перегрев 🔴\n"
         "/coin XRP — анализ одной монеты\n"
         "/alerts on — авто-скан каждые 5 минут\n"
-        "/alerts off — выключить авто-скан\n"
+        "/alerts off — выключить авто-скан\n\n"
+        "<b>🐋 Киты:</b>\n"
+        "/whales — разовый скан сделок $100k+\n"
+        "/whales on — авто-мониторинг китов\n"
+        "/whales off — выключить мониторинг\n\n"
+        "<b>📊 Мультитаймфрейм (15м/1ч/4ч/1д):</b>\n"
+        "/mtf XRP — анализ монеты на всех TF\n"
+        "/mtf top — топ монет по совпадению TF\n\n"
         "/help — это сообщение\n\n"
         "⚠️ <i>Не торговые сигналы. DYOR.</i>"
     )
