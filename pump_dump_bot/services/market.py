@@ -19,7 +19,7 @@ EXCLUDE = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "USDCUSDT", "BUSDUSDT", "TUSDUSDT", 
 _watchlist_cache: list = []
 _watchlist_labels: dict = {}
 _watchlist_updated_at: float = 0
-WATCHLIST_TTL = 6 * 3600
+WATCHLIST_TTL = 3 * 3600
 TOP_N = 30
 
 
