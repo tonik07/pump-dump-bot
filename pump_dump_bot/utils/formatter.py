@@ -55,29 +55,22 @@ def format_coin_card(c, short: bool = False) -> str:
             f"{vol_icon} Объём: {fmt_volume(c.volume_usdt)}  "
             f"(<code>{fmt_pct(c.volume_change_pct)}</code> vs норма)"
         )
-
         if c.oi_change_pct is not None:
             oi_icon = "🔺" if c.oi_change_pct > 0 else "🔻"
             oi_str = fmt_volume(c.oi_usdt) if c.oi_usdt else "—"
-            lines.append(
-                f"{oi_icon} OI: {oi_str}  (<code>{fmt_pct(c.oi_change_pct)}</code>)"
-            )
-
+            lines.append(f"{oi_icon} OI: {oi_str}  (<code>{fmt_pct(c.oi_change_pct)}</code>)")
         if c.funding_rate is not None:
             fr_pct = c.funding_rate * 100
             fr_icon = "⚠️" if fr_pct > 0.04 else ("✅" if fr_pct < 0 else "➖")
             lines.append(f"{fr_icon} Funding: <code>{fr_pct:.4f}%</code>")
-
         if c.long_short_ratio is not None:
             lsr = c.long_short_ratio
             lsr_icon = "🐂" if lsr > 1.3 else ("🐻" if lsr < 0.8 else "⚖️")
             lines.append(f"{lsr_icon} Long/Short: <code>{lsr:.2f}</code>")
-
         if c.signals_list:
             lines.append("")
             for sig, stype in c.signals_list[:4]:
                 lines.append(f"  • {sig}")
-
         lines.append("")
         lines.append(f"💬 <i>{c.analysis}</i>")
 
@@ -86,23 +79,18 @@ def format_coin_card(c, short: bool = False) -> str:
 
 def format_scan_report(coins: list, filter_signal: str = "all") -> list[str]:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
-
     if filter_signal == "all":
         filtered = coins
         header_emoji = "🔍"
-        header_title = "Полный скан рынка"
     elif filter_signal == "pump":
         filtered = [c for c in coins if c.signal == "pump"]
         header_emoji = "🟢"
-        header_title = "Монеты в стадии накопления"
     elif filter_signal == "dump":
         filtered = [c for c in coins if c.signal == "dump"]
         header_emoji = "🔴"
-        header_title = "Перегретые монеты"
     else:
         filtered = coins
         header_emoji = "🔍"
-        header_title = "Полный скан"
 
     pump_count = sum(1 for c in coins if c.signal == "pump")
     dump_count = sum(1 for c in coins if c.signal == "dump")
@@ -124,7 +112,6 @@ def format_scan_report(coins: list, filter_signal: str = "all") -> list[str]:
 
     messages = [header]
     current_msg = ""
-
     for coin in filtered:
         card = format_coin_card(coin, short=False)
         if len(current_msg) + len(card) > 3800:
@@ -132,10 +119,8 @@ def format_scan_report(coins: list, filter_signal: str = "all") -> list[str]:
             current_msg = card
         else:
             current_msg += ("\n" if current_msg else "") + card
-
     if current_msg:
         messages.append(current_msg)
-
     return messages
 
 
@@ -145,20 +130,19 @@ def format_single_coin(c) -> str:
 
 def format_help() -> str:
     return (
-        "📊 <b>Pump/Dump Scanner Bot</b>\n\n"
-        "Анализирую топ-30 альткоинов Binance по объёмам, "
-        "OI, денежным потокам, китам и таймфреймам.\n\n"
-        "<b>📡 Основные команды:</b>\n"
-        "/scan — полный скан всех монет\n"
+        "📊 <b>Pump/Dump Scanner Bot v2</b>\n\n"
+        "<b>📡 Основной скан:</b>\n"
+        "/scan — полный скан топ-30 монет\n"
         "/pump — только накопление 🟢\n"
         "/dump — только перегрев 🔴\n"
         "/coin XRP — анализ одной монеты\n"
-        "/alerts on — авто-скан каждые 5 минут\n"
-        "/alerts off — выключить авто-скан\n\n"
-        "<b>🐋 Киты:</b>\n"
-        "/whales — разовый скан сделок $100k+\n"
-        "/whales on — авто-мониторинг китов\n"
-        "/whales off — выключить мониторинг\n\n"
+        "/alerts on/off — авто-скан каждые 5 минут\n\n"
+        "<b>🐋 Киты ($100k+):</b>\n"
+        "/whales — разовый скан крупных сделок\n"
+        "/whales on/off — авто-мониторинг\n\n"
+        "<b>🔍 Накопление китов:</b>\n"
+        "/accum — скан паттернов тихого накопления\n"
+        "/accum on/off — авто-мониторинг каждые 30 минут\n\n"
         "<b>📊 Мультитаймфрейм (15м/1ч/4ч/1д):</b>\n"
         "/mtf XRP — анализ монеты на всех TF\n"
         "/mtf top — топ монет по совпадению TF\n\n"
