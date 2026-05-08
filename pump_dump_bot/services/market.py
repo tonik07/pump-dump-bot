@@ -1,64 +1,29 @@
 """
 Сервис получения данных с Binance Public API.
-Используем только публичные endpoints — без ключей.
+Динамический вотчлист — топ-30 по объёму, обновляется каждые 6 часов.
 """
 import asyncio
 import aiohttp
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://api1.binance.com/api/v3"
-FAPI_URL = "https://fapi.binance.com/fapi/v1"  # фьючерсы
+BASE_URL = "https://api.binance.com/api/v3"
+FAPI_URL = "https://fapi.binance.com/fapi/v1"
 
-# Топ шиткоины из топ-20 Binance (без BTC, ETH, SOL)
-WATCHLIST = [
-    "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT",
-    "LINKUSDT", "DOTUSDT", "TONUSDT", "SHIBUSDT", "LTCUSDT",
-    "UNIUSDT", "NEARUSDT", "APTUSDT", "TRXUSDT", "SUIUSDT",
-    "OPUSDT", "ARBUSDT",
-]
+EXCLUDE = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "USDCUSDT", "BUSDUSDT", "TUSDUSDT", "USDTUSDT", "FDUSDUSDT", "USDSUSDT"}
 
-SYMBOL_LABELS = {
-    "BNBUSDT": "BNB", "XRPUSDT": "XRP", "ADAUSDT": "ADA",
-    "DOGEUSDT": "DOGE", "AVAXUSDT": "AVAX", "LINKUSDT": "LINK",
-    "DOTUSDT": "DOT", "TONUSDT": "TON", "SHIBUSDT": "SHIB",
-    "LTCUSDT": "LTC", "UNIUSDT": "UNI", "NEARUSDT": "NEAR",
-    "APTUSDT": "APT", "TRXUSDT": "TRX", "SUIUSDT": "SUI",
-    "OPUSDT": "OP", "ARBUSDT": "ARB",
-}
+_watchlist_cache: list = []
+_watchlist_labels: dict = {}
+_watchlist_updated_at: float = 0
+WATCHLIST_TTL = 6 * 3600
+TOP_N = 30
 
 
-@dataclass
-class CoinData:
-    symbol: str
-    label: str
-    price: float
-    price_change_1h: float
-    price_change_24h: float
-    volume_usdt: float        # объём за 24ч в USDT
-    volume_change_pct: float  # изменение объёма vs предыдущий период
-    quote_volume: float       # объём в базовой валюте
-    high_24h: float
-    low_24h: float
-    oi_usdt: Optional[float]          # открытый интерес (фьючи)
-    oi_change_pct: Optional[float]    # изменение OI
-    funding_rate: Optional[float]     # funding rate
-    long_short_ratio: Optional[float] # отношение лонг/шорт
-    # вычисляемые поля
-    signal: str = "neutral"           # pump / dump / neutral
-    score: int = 0
-    analysis: str = ""
-    signals_list: list = None
-
-    def __post_init__(self):
-        if self.signals_list is None:
-            self.signals_list = []
-
-
-async def fetch_json(session: aiohttp.ClientSession, url: str, params: dict = None):
+async def fetch_json(session, url, params=None):
     try:
         async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as r:
             if r.status == 200:
@@ -68,46 +33,72 @@ async def fetch_json(session: aiohttp.ClientSession, url: str, params: dict = No
     return None
 
 
-async def get_ticker_24h(session: aiohttp.ClientSession) -> dict:
+async def update_watchlist(session) -> list:
+    global _watchlist_cache, _watchlist_labels, _watchlist_updated_at
+
+    now = time.time()
+    if _watchlist_cache and (now - _watchlist_updated_at) < WATCHLIST_TTL:
+        return _watchlist_cache
+
+    logger.info("Обновляем динамический вотчлист с Binance...")
     data = await fetch_json(session, f"{BASE_URL}/ticker/24hr")
-    if data:
-        return {d["symbol"]: d for d in data if d["symbol"] in WATCHLIST}
-    return {}
+
+    if not data:
+        logger.warning("Не удалось получить тикеры — используем кэш")
+        return _watchlist_cache or []
+
+    usdt_pairs = [
+        d for d in data
+        if d["symbol"].endswith("USDT")
+        and d["symbol"] not in EXCLUDE
+        and float(d.get("quoteVolume", 0)) > 5_000_000
+    ]
+
+    usdt_pairs.sort(key=lambda d: float(d.get("quoteVolume", 0)), reverse=True)
+    top = usdt_pairs[:TOP_N]
+
+    _watchlist_cache = [d["symbol"] for d in top]
+    _watchlist_labels = {d["symbol"]: d["symbol"].replace("USDT", "") for d in top}
+    _watchlist_updated_at = now
+
+    logger.info(f"Вотчлист обновлён: {len(_watchlist_cache)} монет — {_watchlist_cache[:5]}...")
+    return _watchlist_cache
 
 
-async def get_klines_1h(session: aiohttp.ClientSession, symbol: str) -> Optional[list]:
-    """Получаем 2 свечи по 1ч для сравнения объёмов"""
-    return await fetch_json(session, f"{BASE_URL}/klines", params={
-        "symbol": symbol, "interval": "1h", "limit": 48
-    })
+def get_watchlist() -> list:
+    return _watchlist_cache
 
 
-async def get_futures_oi(session: aiohttp.ClientSession, symbol: str) -> Optional[dict]:
-    return await fetch_json(session, f"{FAPI_URL}/openInterest", params={"symbol": symbol})
+def get_label(symbol: str) -> str:
+    return _watchlist_labels.get(symbol, symbol.replace("USDT", ""))
 
 
-async def get_futures_oi_hist(session: aiohttp.ClientSession, symbol: str) -> Optional[list]:
-    return await fetch_json(session, f"{FAPI_URL}/openInterestHist", params={
-        "symbol": symbol, "period": "1h", "limit": 2
-    })
-
-
-async def get_funding_rate(session: aiohttp.ClientSession, symbol: str) -> Optional[dict]:
-    data = await fetch_json(session, f"{FAPI_URL}/premiumIndex", params={"symbol": symbol})
-    return data
-
-
-async def get_long_short_ratio(session: aiohttp.ClientSession, symbol: str) -> Optional[list]:
-    return await fetch_json(session, f"{FAPI_URL}/globalLongShortAccountRatio", params={
-        "symbol": symbol, "period": "1h", "limit": 1
-    })
+@dataclass
+class CoinData:
+    symbol: str
+    label: str
+    price: float
+    price_change_1h: float
+    price_change_24h: float
+    volume_usdt: float
+    volume_change_pct: float
+    quote_volume: float
+    high_24h: float
+    low_24h: float
+    oi_usdt: Optional[float]
+    oi_change_pct: Optional[float]
+    funding_rate: Optional[float]
+    long_short_ratio: Optional[float]
+    signal: str = "neutral"
+    score: int = 0
+    analysis: str = ""
+    signals_list: list = field(default_factory=list)
 
 
 def compute_volume_change(klines: list) -> float:
-    """Сравниваем среднюю часовую свечу за последние 24ч vs предыдущие 24ч"""
     if not klines or len(klines) < 2:
         return 0.0
-    volumes = [float(k[5]) for k in klines]  # индекс 5 = volume
+    volumes = [float(k[5]) for k in klines]
     recent = sum(volumes[-24:]) / 24 if len(volumes) >= 24 else sum(volumes) / len(volumes)
     prev = sum(volumes[-48:-24]) / 24 if len(volumes) >= 48 else recent
     if prev == 0:
@@ -119,7 +110,6 @@ def analyze_coin(c: CoinData) -> CoinData:
     score = 0
     signals = []
 
-    # --- ОБЪЁМ ---
     if c.volume_change_pct > 100:
         score += 3
         signals.append(("📈 Объём ×2+ от нормы", "bull"))
@@ -128,31 +118,28 @@ def analyze_coin(c: CoinData) -> CoinData:
         signals.append((f"📈 Объём +{c.volume_change_pct:.0f}%", "bull"))
     elif c.volume_change_pct > 20:
         score += 1
-        signals.append((f"📊 Объём немного выше нормы (+{c.volume_change_pct:.0f}%)", "bull"))
+        signals.append((f"📊 Объём выше нормы (+{c.volume_change_pct:.0f}%)", "bull"))
     elif c.volume_change_pct < -30:
         score -= 2
         signals.append(("📉 Объём сдыхает", "bear"))
 
-    # --- OI ---
     if c.oi_change_pct is not None:
         if c.oi_change_pct > 5:
             score += 2
-            signals.append((f"🔥 OI растёт +{c.oi_change_pct:.1f}% — деньги заходят", "bull"))
+            signals.append((f"🔥 OI растёт +{c.oi_change_pct:.1f}%", "bull"))
         elif c.oi_change_pct < -5:
             score -= 2
-            signals.append((f"❄️ OI падает {c.oi_change_pct:.1f}% — позиции закрываются", "bear"))
+            signals.append((f"❄️ OI падает {c.oi_change_pct:.1f}%", "bear"))
 
-    # --- FUNDING RATE ---
     if c.funding_rate is not None:
         fr = c.funding_rate * 100
         if fr > 0.05:
             score -= 2
-            signals.append((f"⚠️ Funding перегрет +{fr:.4f}% — шорт-сжатие опасно", "bear"))
+            signals.append((f"⚠️ Funding перегрет +{fr:.4f}%", "bear"))
         elif fr < -0.01:
             score += 1
-            signals.append((f"💡 Funding отрицательный {fr:.4f}% — шорты платят лонгам", "bull"))
+            signals.append((f"💡 Funding отрицательный {fr:.4f}%", "bull"))
 
-    # --- LONG/SHORT RATIO ---
     if c.long_short_ratio is not None:
         lsr = c.long_short_ratio
         if lsr > 1.5:
@@ -162,27 +149,24 @@ def analyze_coin(c: CoinData) -> CoinData:
             score -= 1
             signals.append((f"📊 Long/Short: {lsr:.2f} — шорты давят", "bear"))
 
-    # --- ЦЕНА ---
     if c.price_change_24h > 15 and c.volume_change_pct > 100:
         score -= 1
-        signals.append(("🚨 Быстрый рост цены при высоком объёме — возможен откат", "warn"))
+        signals.append(("🚨 Быстрый рост — возможен откат", "warn"))
 
     if c.price_change_24h < -10 and c.volume_change_pct > 80:
         score += 1
-        signals.append(("🛒 Слив на объёме — возможно выбивание стопов перед разворотом", "warn"))
+        signals.append(("🛒 Слив на объёме — возможен разворот", "warn"))
 
-    # --- БЛИЗОСТЬ К ХАЮ/ЛОЮ ---
     range_24h = c.high_24h - c.low_24h
     if range_24h > 0:
-        pos_in_range = (c.price - c.low_24h) / range_24h
-        if pos_in_range < 0.15:
+        pos = (c.price - c.low_24h) / range_24h
+        if pos < 0.15:
             score += 1
-            signals.append(("🔻 Цена у дна диапазона 24ч — потенциал отскока", "bull"))
-        elif pos_in_range > 0.85:
+            signals.append(("🔻 У дна диапазона 24ч", "bull"))
+        elif pos > 0.85:
             score -= 1
-            signals.append(("🔺 Цена у хая 24ч — осторожно с лонгами", "warn"))
+            signals.append(("🔺 У хая 24ч — осторожно", "warn"))
 
-    # --- ИТОГ ---
     c.score = score
     c.signals_list = signals
 
@@ -193,61 +177,45 @@ def analyze_coin(c: CoinData) -> CoinData:
     else:
         c.signal = "neutral"
 
-    # Текстовый вывод
-    bull_signals = [s[0] for s in signals if s[1] == "bull"]
-    bear_signals = [s[0] for s in signals if s[1] == "bear"]
+    bull_s = [s[0] for s in signals if s[1] == "bull"]
+    bear_s = [s[0] for s in signals if s[1] == "bear"]
 
     if c.signal == "pump":
-        reasons = bull_signals[:2]
-        c.analysis = f"Монета в фазе накопления. {'. '.join(reasons)}. Стоит присмотреться."
+        c.analysis = f"Монета в фазе накопления. {'. '.join(bull_s[:2])}. Стоит присмотреться."
     elif c.signal == "dump":
-        reasons = bear_signals[:2]
-        c.analysis = f"Признаки перегрева или слива. {'. '.join(reasons)}. Осторожно."
+        c.analysis = f"Признаки перегрева. {'. '.join(bear_s[:2])}. Осторожно."
     else:
         c.analysis = "Нейтральная зона — аномалий не обнаружено."
 
     return c
 
 
-async def scan_market() -> list[CoinData]:
-    """Главная функция — сканирует весь вотчлист"""
+async def scan_market() -> list:
     results = []
 
     async with aiohttp.ClientSession() as session:
-        # 1. Получаем 24h тикеры для всех монет
-        tickers = await get_ticker_24h(session)
+        watchlist = await update_watchlist(session)
+        if not watchlist:
+            return []
 
-        # 2. Параллельно грузим данные по каждой монете
-        tasks = []
-        for symbol in WATCHLIST:
-            tasks.append(_fetch_coin_data(session, symbol, tickers.get(symbol)))
+        data = await fetch_json(session, f"{BASE_URL}/ticker/24hr")
+        tickers = {d["symbol"]: d for d in data if d["symbol"] in watchlist} if data else {}
 
+        tasks = [_fetch_coin_data(session, sym, tickers.get(sym)) for sym in watchlist]
         coins = await asyncio.gather(*tasks, return_exceptions=True)
 
     for coin in coins:
         if isinstance(coin, CoinData):
             results.append(analyze_coin(coin))
-        elif isinstance(coin, Exception):
-            logger.error(f"Coin fetch error: {coin}")
 
-    # Сортируем: pump → dump → neutral, внутри по |score|
-    results.sort(key=lambda c: (
-        0 if c.signal == "pump" else 1 if c.signal == "dump" else 2,
-        -abs(c.score)
-    ))
+    results.sort(key=lambda c: (0 if c.signal == "pump" else 1 if c.signal == "dump" else 2, -abs(c.score)))
     return results
 
 
-async def _fetch_coin_data(
-    session: aiohttp.ClientSession,
-    symbol: str,
-    ticker: Optional[dict]
-) -> Optional[CoinData]:
+async def _fetch_coin_data(session, symbol, ticker):
     if not ticker:
         return None
-
-    label = SYMBOL_LABELS.get(symbol, symbol.replace("USDT", ""))
-
+    label = get_label(symbol)
     try:
         price = float(ticker["lastPrice"])
         price_change_24h = float(ticker["priceChangePercent"])
@@ -258,40 +226,32 @@ async def _fetch_coin_data(
     except (KeyError, ValueError):
         return None
 
-    # Объём: часовые свечи
     klines, oi_data, oi_hist, funding, lsr = await asyncio.gather(
-        get_klines_1h(session, symbol),
-        get_futures_oi(session, symbol),
-        get_futures_oi_hist(session, symbol),
-        get_funding_rate(session, symbol),
-        get_long_short_ratio(session, symbol),
+        fetch_json(session, f"{BASE_URL}/klines", {"symbol": symbol, "interval": "1h", "limit": 48}),
+        fetch_json(session, f"{FAPI_URL}/openInterest", {"symbol": symbol}),
+        fetch_json(session, f"{FAPI_URL}/openInterestHist", {"symbol": symbol, "period": "1h", "limit": 2}),
+        fetch_json(session, f"{FAPI_URL}/premiumIndex", {"symbol": symbol}),
+        fetch_json(session, f"{FAPI_URL}/globalLongShortAccountRatio", {"symbol": symbol, "period": "1h", "limit": 1}),
         return_exceptions=True
     )
 
-    volume_change_pct = 0.0
-    if isinstance(klines, list) and klines:
-        volume_change_pct = compute_volume_change(klines)
+    volume_change_pct = compute_volume_change(klines) if isinstance(klines, list) else 0.0
 
-    # 1h изменение цены из свечей
     price_change_1h = 0.0
     if isinstance(klines, list) and len(klines) >= 2:
         try:
-            open_1h = float(klines[-2][1])
-            close_1h = float(klines[-1][4])
-            if open_1h > 0:
-                price_change_1h = ((close_1h - open_1h) / open_1h) * 100
-        except (IndexError, ValueError):
+            price_change_1h = ((float(klines[-1][4]) - float(klines[-2][1])) / float(klines[-2][1])) * 100
+        except (IndexError, ValueError, ZeroDivisionError):
             pass
 
-    # OI
     oi_usdt = None
-    oi_change_pct = None
     if isinstance(oi_data, dict) and "openInterest" in oi_data:
         try:
             oi_usdt = float(oi_data["openInterest"]) * price
         except (ValueError, TypeError):
             pass
 
+    oi_change_pct = None
     if isinstance(oi_hist, list) and len(oi_hist) >= 2:
         try:
             oi_prev = float(oi_hist[-2]["sumOpenInterest"])
@@ -301,7 +261,6 @@ async def _fetch_coin_data(
         except (IndexError, KeyError, ValueError):
             pass
 
-    # Funding rate
     funding_rate = None
     if isinstance(funding, dict):
         try:
@@ -309,7 +268,6 @@ async def _fetch_coin_data(
         except (ValueError, TypeError):
             pass
 
-    # Long/Short
     long_short = None
     if isinstance(lsr, list) and lsr:
         try:
@@ -318,18 +276,10 @@ async def _fetch_coin_data(
             pass
 
     return CoinData(
-        symbol=symbol,
-        label=label,
-        price=price,
-        price_change_1h=price_change_1h,
-        price_change_24h=price_change_24h,
-        volume_usdt=volume_usdt,
-        volume_change_pct=volume_change_pct,
-        quote_volume=quote_volume,
-        high_24h=high_24h,
-        low_24h=low_24h,
-        oi_usdt=oi_usdt,
-        oi_change_pct=oi_change_pct,
-        funding_rate=funding_rate,
-        long_short_ratio=long_short,
+        symbol=symbol, label=label, price=price,
+        price_change_1h=price_change_1h, price_change_24h=price_change_24h,
+        volume_usdt=volume_usdt, volume_change_pct=volume_change_pct,
+        quote_volume=quote_volume, high_24h=high_24h, low_24h=low_24h,
+        oi_usdt=oi_usdt, oi_change_pct=oi_change_pct,
+        funding_rate=funding_rate, long_short_ratio=long_short,
     )
