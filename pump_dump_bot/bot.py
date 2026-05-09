@@ -3,7 +3,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from config import config
-from handlers import start, scanner, alerts, help, whales, mtf, accumulation
+from handlers import start, scanner, alerts, help, whales, mtf, accumulation, onchain
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,6 +22,7 @@ async def main():
     dp.include_router(whales.router)
     dp.include_router(mtf.router)
     dp.include_router(accumulation.router)
+    dp.include_router(onchain.router)
     dp.include_router(help.router)
 
     logger.info("🚀 Pump/Dump Scanner Bot запущен")
